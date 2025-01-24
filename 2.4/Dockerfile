@@ -1,4 +1,4 @@
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 # add our user and group first to make sure their IDs get assigned consistently, regardless of whatever dependencies get added
 #RUN groupadd -r www-data && useradd -r --create-home -g www-data www-data
@@ -22,8 +22,8 @@ RUN set -eux; \
 	; \
 	rm -rf /var/lib/apt/lists/*
 
-ENV HTTPD_VERSION 2.4.54
-ENV HTTPD_SHA256 eb397feeefccaf254f8d45de3768d9d68e8e73851c49afd5b7176d1ecf80c340
+ENV HTTPD_VERSION 2.4.63
+ENV HTTPD_SHA256 88fc236ab99b2864b248de7d49a008ec2afd7551e64dce8b95f58f32f94c46ab
 
 # https://httpd.apache.org/security/vulnerabilities_24.html
 ENV HTTPD_PATCHES=""
@@ -37,7 +37,6 @@ RUN set -eux; \
 	apt-get update; \
 	apt-get install -y --no-install-recommends \
 		bzip2 \
-		dirmngr \
 		dpkg-dev \
 		gcc \
 		gnupg \
@@ -52,6 +51,7 @@ RUN set -eux; \
 		libssl-dev \
 		libxml2-dev \
 		make \
+		patch \
 		wget \
 		zlib1g-dev \
 	; \
@@ -63,12 +63,9 @@ RUN set -eux; \
 		local success=; \
 		local distUrl=; \
 		for distUrl in \
-# https://issues.apache.org/jira/browse/INFRA-8753?focusedCommentId=14735394#comment-14735394
-			'https://www.apache.org/dyn/closer.cgi?action=download&filename=' \
-# if the version is outdated (or we're grabbing the .asc file), we might have to pull from the dist/archive :/
-			https://downloads.apache.org/ \
-			https://www-us.apache.org/dist/ \
-			https://www.apache.org/dist/ \
+# https://apache.org/history/mirror-history.html
+			https://dlcdn.apache.org/ \
+# if the version is outdated, we have to pull from the archive
 			https://archive.apache.org/dist/ \
 		; do \
 			if wget -O "$f" "$distUrl$distFile" && [ -s "$f" ]; then \
@@ -85,7 +82,7 @@ RUN set -eux; \
 # see https://httpd.apache.org/download.cgi#verify
 	ddist 'httpd.tar.bz2.asc' "httpd/httpd-$HTTPD_VERSION.tar.bz2.asc"; \
 	export GNUPGHOME="$(mktemp -d)"; \
-# $ docker run --rm buildpack-deps:bullseye-curl bash -c 'wget -qO- https://downloads.apache.org/httpd/KEYS | gpg --batch --import &> /dev/null && gpg --batch --list-keys --with-fingerprint --with-colons' | awk -F: '$1 == "pub" && $2 == "-" { pub = 1 } pub && $1 == "fpr" { fpr = $10 } $1 == "sub" { pub = 0 } pub && fpr && $1 == "uid" && $2 == "-" { print "#", $10; print "\t\t" fpr " \\"; pub = 0 }'
+# $ docker run --rm buildpack-deps:bookworm-curl bash -c 'wget -qO- https://downloads.apache.org/httpd/KEYS | gpg --batch --import &> /dev/null && gpg --batch --list-keys --with-fingerprint --with-colons' | awk -F: '$1 == "pub" && $2 == "-" { pub = 1 } pub && $1 == "fpr" { fpr = $10 } $1 == "sub" { pub = 0 } pub && fpr && $1 == "uid" && $2 == "-" { print "#", $10; print "\t\t" fpr " \\"; pub = 0 }'
 	for key in \
 # Rodent of Unusual Size (DSA) <coar@ACM.Org>
 		DE29FB3971E71543FD2DC049508EAEC5302DA568 \
@@ -159,7 +156,7 @@ RUN set -eux; \
 		gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$key"; \
 	done; \
 	gpg --batch --verify httpd.tar.bz2.asc httpd.tar.bz2; \
-	command -v gpgconf && gpgconf --kill all || :; \
+	gpgconf --kill all; \
 	rm -rf "$GNUPGHOME" httpd.tar.bz2.asc; \
 	\
 	mkdir -p src; \
@@ -218,7 +215,7 @@ RUN set -eux; \
 	apt-mark auto '.*' > /dev/null; \
 	[ -z "$savedAptMark" ] || apt-mark manual $savedAptMark; \
 	find /usr/local -type f -executable -exec ldd '{}' ';' \
-		| awk '/=>/ { print $(NF-1) }' \
+		| awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) { next }; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \
 		| sort -u \
 		| xargs -r dpkg-query --search \
 		| cut -d: -f1 \
